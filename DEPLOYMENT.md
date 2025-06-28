@@ -15,6 +15,7 @@
 4. Select your region
 5. Copy the connection string
 
+
 ### Option B: Neon (Free PostgreSQL)
 1. Go to [Neon](https://neon.tech)
 2. Create a free account
