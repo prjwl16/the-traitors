@@ -1,0 +1,216 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Game {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  hostId       String
+  status       GameStatus @default(WAITING)
+  currentPhase GamePhase @default(DAY)
+  currentDay   Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Auto-phase settings
+  autoPhaseEnabled Boolean @default(false)
+  phaseStartTime   DateTime?
+  phaseDurationHours Int @default(12)
+
+  players       Player[]
+  votes         Vote[]
+  narrations    Narration[]
+  playerMissions PlayerMission[]
+  chaosEvents   ChaosEvent[]
+  whispers      Whisper[]
+  roomObjects   RoomObject[]
+  personalItems PersonalItem[]
+  placedItems   PlacedItem[]
+  roomLogs      RoomLog[]
+}
+
+model Player {
+  id       String   @id @default(cuid())
+  name     String
+  gameId   String
+  role     PlayerRole?
+  isAlive  Boolean  @default(true)
+  isHost   Boolean  @default(false)
+  joinedAt DateTime @default(now())
+
+  game             Game            @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  votesGiven       Vote[]          @relation("VoterVotes")
+  votesReceived    Vote[]          @relation("TargetVotes")
+  missions         PlayerMission[]
+  sentWhispers     Whisper[]       @relation("SentWhispers")
+  receivedWhispers Whisper[]       @relation("ReceivedWhispers")
+  personalItems    PersonalItem[]
+  placedItems      PlacedItem[]
+
+  @@unique([gameId, name])
+}
+
+model Vote {
+  id       String   @id @default(cuid())
+  gameId   String
+  voterId  String
+  targetId String
+  phase    GamePhase
+  day      Int
+  createdAt DateTime @default(now())
+
+  game   Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  voter  Player @relation("VoterVotes", fields: [voterId], references: [id], onDelete: Cascade)
+  target Player @relation("TargetVotes", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, voterId, phase, day])
+}
+
+model Narration {
+  id        String   @id @default(cuid())
+  gameId    String
+  phase     GamePhase
+  day       Int
+  content   String
+  createdAt DateTime @default(now())
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, phase, day])
+}
+
+model PlayerMission {
+  id        String   @id @default(cuid())
+  gameId    String
+  playerId  String
+  phase     GamePhase
+  day       Int
+  content   String
+  completed Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  game   Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, playerId, phase, day])
+}
+
+enum GameStatus {
+  WAITING
+  PLAYING
+  ENDED
+}
+
+enum GamePhase {
+  DAY
+  NIGHT
+}
+
+model ChaosEvent {
+  id        String   @id @default(cuid())
+  gameId    String
+  type      String
+  content   String
+  phase     GamePhase
+  day       Int
+  createdAt DateTime @default(now())
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+}
+
+model Whisper {
+  id           String   @id @default(cuid())
+  gameId       String
+  fromPlayerId String
+  toPlayerId   String
+  phase        GamePhase
+  day          Int
+  content      String
+  isLeaked     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  game       Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  fromPlayer Player @relation("SentWhispers", fields: [fromPlayerId], references: [id], onDelete: Cascade)
+  toPlayer   Player @relation("ReceivedWhispers", fields: [toPlayerId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, fromPlayerId, phase, day])
+}
+
+model RoomObject {
+  id            String   @id @default(cuid())
+  gameId        String
+  name          String
+  description   String
+  state         ObjectState @default(UNTOUCHED)
+  lastAction    String?
+  lastUpdatedBy String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  game        Game         @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  placedItems PlacedItem[]
+
+  @@unique([gameId, name])
+}
+
+model PersonalItem {
+  id       String @id @default(cuid())
+  gameId   String
+  playerId String
+  name     String
+
+  game   Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, playerId, name])
+}
+
+model PlacedItem {
+  id         String   @id @default(cuid())
+  gameId     String
+  playerId   String
+  itemName   String
+  objectId   String
+  phase      GamePhase
+  day        Int
+  createdAt  DateTime @default(now())
+
+  game       Game       @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  player     Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  roomObject RoomObject @relation(fields: [objectId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, playerId, itemName])
+}
+
+model RoomLog {
+  id        String   @id @default(cuid())
+  gameId    String
+  content   String
+  phase     GamePhase
+  day       Int
+  createdAt DateTime @default(now())
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+}
+
+enum ObjectState {
+  UNTOUCHED
+  PLACED
+  DESTROYED
+  CLEANED
+  VISITED
+}
+
+enum PlayerRole {
+  TRAITOR
+  FAITHFUL
+}
