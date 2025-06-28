@@ -66,10 +66,10 @@ export async function POST(request: NextRequest) {
           }
 
           // Update game and eliminate player if needed
-          const updates = [
+          const updates: any[] = [
             prisma.game.update({
               where: { id: game.id },
-              data: { 
+              data: {
                 currentPhase: nextPhase,
                 currentDay: nextDay,
                 phaseStartTime: new Date() // Reset phase timer
