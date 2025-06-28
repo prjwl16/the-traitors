@@ -11,7 +11,7 @@ interface Player {
   isAlive: boolean
   isHost: boolean
   role?: 'TRAITOR' | 'FAITHFUL'
-  userId?: string
+  userId: string
 }
 
 interface GameData {

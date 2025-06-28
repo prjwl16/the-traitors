@@ -67,6 +67,7 @@ export async function GET(
         name: player.name,
         isAlive: player.isAlive,
         isHost: player.isHost,
+        userId: player.userId, // Include userId for admin panel access control
         // Only show role to the player themselves or if game is ended
         role: (player.id === currentPlayer.id || game.status === 'ENDED') ? player.role : undefined
       })),
