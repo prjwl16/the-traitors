@@ -93,7 +93,7 @@ export async function GET(
           }, {} as Record<string, number>)
 
           // Find player with most votes
-          const maxVotes = Math.max(...Object.values(voteCount))
+          const maxVotes = Math.max(...(Object.values(voteCount) as number[]))
           const eliminatedId = Object.entries(voteCount)
             .find(([_, votes]) => votes === maxVotes)?.[0]
 
