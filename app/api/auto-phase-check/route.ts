@@ -42,15 +42,22 @@ export async function POST(request: NextRequest) {
           }, {} as Record<string, number>)
 
           let eliminatedPlayerId: string | null = null
-          
+
           if (Object.keys(voteCount).length > 0) {
             const maxVotes = Math.max(...Object.values(voteCount))
             const playersWithMaxVotes = Object.entries(voteCount)
               .filter(([_, votes]) => votes === maxVotes)
               .map(([playerId, _]) => playerId)
-            
+
+            // Handle elimination (including ties)
             if (playersWithMaxVotes.length === 1) {
+              // Clear winner
               eliminatedPlayerId = playersWithMaxVotes[0]
+            } else if (playersWithMaxVotes.length > 1) {
+              // Tie-breaking: Random selection
+              const randomIndex = Math.floor(Math.random() * playersWithMaxVotes.length)
+              eliminatedPlayerId = playersWithMaxVotes[randomIndex]
+              console.log(`Auto-phase vote tie broken randomly: ${playersWithMaxVotes.length} players tied, selected ${eliminatedPlayerId}`)
             }
           }
 
@@ -86,9 +93,7 @@ export async function POST(request: NextRequest) {
             )
           }
 
-          await prisma.$transaction(updates)
-
-          // Check win conditions
+          // Check win conditions BEFORE updating database
           const alivePlayers = game.players.filter(p => p.isAlive && p.id !== eliminatedPlayerId)
           const aliveTraitors = alivePlayers.filter(p => p.role === 'TRAITOR').length
           const aliveFaithfuls = alivePlayers.filter(p => p.role === 'FAITHFUL').length
@@ -104,21 +109,28 @@ export async function POST(request: NextRequest) {
             gameEnded = true
           }
 
+          // Update game state and end game if needed
           if (gameEnded) {
-            await prisma.game.update({
-              where: { id: game.id },
-              data: { 
-                status: 'ENDED',
-                autoPhaseEnabled: false
-              }
-            })
+            updates.push(
+              prisma.game.update({
+                where: { id: game.id },
+                data: {
+                  status: 'ENDED',
+                  winner: winner,
+                  endedAt: new Date(),
+                  autoPhaseEnabled: false
+                }
+              })
+            )
           }
+
+          await prisma.$transaction(updates)
 
           // Auto-generate narration and missions for new phase
           if (!gameEnded) {
             try {
               // Generate narration
-              const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3001'
+              const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000'
               await fetch(`${baseUrl}/api/narration/generate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../lib/db'
+import { validateAuthenticatedGameAccess, validateGameStart } from '../../../../../lib/gameValidation'
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array]
@@ -18,26 +19,14 @@ export async function POST(
     const { hostId } = await request.json()
     const { gameId } = await params
     
-    const game = await prisma.game.findUnique({
-      where: { id: gameId },
-      include: { players: true }
+    // Validate authenticated game access and requirements
+    const { game } = await validateAuthenticatedGameAccess(request, gameId, hostId, {
+      requireHost: true,
+      allowedStatuses: ['WAITING']
     })
 
-    if (!game) {
-      return NextResponse.json({ error: 'Game not found' }, { status: 404 })
-    }
-
-    if (game.hostId !== hostId) {
-      return NextResponse.json({ error: 'Only the host can start the game' }, { status: 403 })
-    }
-
-    if (game.status !== 'WAITING') {
-      return NextResponse.json({ error: 'Game has already started' }, { status: 400 })
-    }
-
-    if (game.players.length < 4) {
-      return NextResponse.json({ error: 'Need at least 4 players to start' }, { status: 400 })
-    }
+    // Validate player count and game balance
+    validateGameStart(game.players)
 
     // Assign roles: 1/3 traitors, 2/3 faithfuls (minimum 1 traitor)
     const playerCount = game.players.length
@@ -61,7 +50,7 @@ export async function POST(
         }
       }),
       // Assign roles to players
-      ...shuffledPlayers.map((player, index) =>
+      ...shuffledPlayers.map((player: any, index) =>
         prisma.player.update({
           where: { id: player.id },
           data: { role: roleAssignments[index] as 'TRAITOR' | 'FAITHFUL' }
@@ -71,7 +60,7 @@ export async function POST(
 
     // Initialize Room of Secrets
     try {
-      const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3001'
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL || 'http://localhost:3000'
       await fetch(`${baseUrl}/api/games/${gameId}/room/initialize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function POST(request: NextRequest) {
   try {
     // Call the auto-phase check endpoint
-    const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3003'}/api/auto-phase-check`, {
+    const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/auto-phase-check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     })

@@ -1,12 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../lib/db'
+import { getAuthUser } from '../../../../../lib/auth'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ gameId: string }> }
 ) {
   try {
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
     const { gameId } = await params
+
+    // Verify user is a player in this game
+    const player = await prisma.player.findFirst({
+      where: {
+        gameId,
+        userId: user.id
+      }
+    })
+
+    if (!player) {
+      return NextResponse.json({ error: 'You are not a player in this game' }, { status: 403 })
+    }
     
     const game = await prisma.game.findUnique({
       where: { id: gameId },

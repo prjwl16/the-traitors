@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useAuth } from '../../../../lib/useAuth'
 
 interface RoomObject {
   id: string
@@ -43,10 +44,9 @@ export default function RoomPage() {
   const params = useParams()
   const router = useRouter()
   const gameId = params.gameId as string
-  
+  const { user, loading: authLoading } = useAuth()
+
   const [roomData, setRoomData] = useState<RoomData | null>(null)
-  const [playerId, setPlayerId] = useState<string | null>(null)
-  const [playerName, setPlayerName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [interacting, setInteracting] = useState(false)
@@ -54,54 +54,25 @@ export default function RoomPage() {
   const [selectedAction, setSelectedAction] = useState<string>('')
   const [selectedItem, setSelectedItem] = useState<string>('')
 
+  // Redirect to auth if not authenticated
   useEffect(() => {
-    // Get player info from localStorage
-    const storedPlayerId = localStorage.getItem('playerId')
-    const storedPlayerName = localStorage.getItem('playerName')
-    
-    if (!storedPlayerId || !storedPlayerName) {
-      router.push('/')
-      return
+    if (!authLoading && !user) {
+      router.push('/auth')
     }
-    
-    setPlayerId(storedPlayerId)
-    setPlayerName(storedPlayerName)
-  }, [router])
+  }, [authLoading, user, router])
 
   const fetchRoomData = async () => {
-    if (!playerId) return
+    if (!user) return
 
     try {
-      const response = await fetch(`/api/games/${gameId}/room?playerId=${playerId}`)
+      const response = await fetch(`/api/games/${gameId}/room`)
       const data = await response.json()
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch room data')
       }
 
-      // If room objects are empty, try to initialize the room
-      if (data.roomObjects && data.roomObjects.length === 0) {
-        try {
-          await fetch(`/api/games/${gameId}/room/initialize`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hostId: playerId })
-          })
-          // Fetch again after initialization
-          const retryResponse = await fetch(`/api/games/${gameId}/room?playerId=${playerId}`)
-          const retryData = await retryResponse.json()
-          if (retryResponse.ok) {
-            setRoomData(retryData)
-          } else {
-            setRoomData(data)
-          }
-        } catch (initErr) {
-          console.error('Failed to initialize room:', initErr)
-          setRoomData(data)
-        }
-      } else {
-        setRoomData(data)
-      }
+      setRoomData(data)
       setError('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch room data')
@@ -111,13 +82,13 @@ export default function RoomPage() {
   }
 
   useEffect(() => {
-    if (gameId && playerId) {
+    if (gameId && user && !authLoading) {
       fetchRoomData()
       // Poll for updates every 5 seconds
       const interval = setInterval(fetchRoomData, 5000)
       return () => clearInterval(interval)
     }
-  }, [gameId, playerId])
+  }, [gameId, user, authLoading])
 
   const handleInteraction = async () => {
     if (!selectedObject || !selectedAction || interacting) return
@@ -130,7 +101,6 @@ export default function RoomPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          playerId,
           objectId: selectedObject,
           action: selectedAction,
           itemName: selectedAction === 'PLACE' ? selectedItem : undefined

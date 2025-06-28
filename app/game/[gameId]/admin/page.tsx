@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useAuth } from '../../../../lib/useAuth'
 
 interface Player {
   id: string
@@ -10,6 +11,7 @@ interface Player {
   isAlive: boolean
   isHost: boolean
   role?: 'TRAITOR' | 'FAITHFUL'
+  userId?: string
 }
 
 interface GameData {
@@ -19,37 +21,44 @@ interface GameData {
   status: 'WAITING' | 'PLAYING' | 'ENDED'
   currentPhase: 'DAY' | 'NIGHT'
   currentDay: number
+  currentPlayerId?: string
   players: Player[]
   currentVotes: Record<string, number>
   hasVoted: string[]
+}
+
+interface JoinRequest {
+  id: string
+  playerName: string
+  userEmail: string
+  createdAt: string
 }
 
 export default function AdminPage() {
   const params = useParams()
   const router = useRouter()
   const gameId = params.gameId as string
-  
+  const { user, loading: authLoading } = useAuth()
+
   const [gameData, setGameData] = useState<GameData | null>(null)
-  const [playerId, setPlayerId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [autoPhaseEnabled, setAutoPhaseEnabled] = useState(false)
   const [phaseDuration, setPhaseDuration] = useState(12)
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null)
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([])
+  const [requestsLoading, setRequestsLoading] = useState(false)
 
+  // Redirect to auth if not authenticated
   useEffect(() => {
-    // Get player info from localStorage
-    const storedPlayerId = localStorage.getItem('playerId')
-    
-    if (!storedPlayerId) {
-      router.push('/')
-      return
+    if (!authLoading && !user) {
+      router.push('/auth')
     }
-    
-    setPlayerId(storedPlayerId)
-  }, [router])
+  }, [authLoading, user, router])
 
   const fetchGameData = async () => {
+    if (!user) return
+
     try {
       const response = await fetch(`/api/games/${gameId}`)
       const data = await response.json()
@@ -78,21 +87,73 @@ export default function AdminPage() {
     }
   }
 
+  const fetchJoinRequests = async () => {
+    if (!user || !gameData) return
+
+    setRequestsLoading(true)
+    try {
+      const response = await fetch(`/api/games/${gameId}/join-requests`)
+      const data = await response.json()
+
+      if (response.ok) {
+        setJoinRequests(data.requests)
+      }
+    } catch (err) {
+      console.error('Failed to fetch join requests:', err)
+    } finally {
+      setRequestsLoading(false)
+    }
+  }
+
+  const handleJoinRequest = async (requestId: string, action: 'accept' | 'reject') => {
+    try {
+      const response = await fetch(`/api/games/${gameId}/join-request/${requestId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || `Failed to ${action} request`)
+      }
+
+      // Refresh both game data and join requests
+      await Promise.all([fetchGameData(), fetchJoinRequests()])
+
+      alert(`Join request ${action}ed successfully!`)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : `Failed to ${action} request`)
+    }
+  }
+
   useEffect(() => {
-    if (gameId && playerId) {
+    if (gameId && user && !authLoading) {
       fetchGameData()
       // Poll for updates every 2 seconds
       const interval = setInterval(fetchGameData, 2000)
       return () => clearInterval(interval)
     }
-  }, [gameId, playerId])
+  }, [gameId, user, authLoading])
+
+  useEffect(() => {
+    if (gameData && gameData.status === 'WAITING') {
+      fetchJoinRequests()
+      // Poll for join requests every 10 seconds
+      const interval = setInterval(fetchJoinRequests, 10000)
+      return () => clearInterval(interval)
+    }
+  }, [gameData])
 
   const nextPhase = async () => {
+    if (!gameData?.currentPlayerId) return
+
     try {
       const response = await fetch(`/api/games/${gameId}/next-phase`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hostId: playerId })
+        body: JSON.stringify({ hostId: gameData.currentPlayerId })
       })
 
       const data = await response.json()
@@ -121,7 +182,7 @@ export default function AdminPage() {
       const response = await fetch('/api/narration/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gameId, hostId: playerId })
+        body: JSON.stringify({ gameId, hostId: gameData?.currentPlayerId })
       })
 
       const data = await response.json()
@@ -142,7 +203,7 @@ export default function AdminPage() {
       const response = await fetch('/api/missions/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gameId, hostId: playerId })
+        body: JSON.stringify({ gameId, hostId: gameData?.currentPlayerId })
       })
 
       const data = await response.json()
@@ -163,7 +224,7 @@ export default function AdminPage() {
       const response = await fetch('/api/events/chaos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gameId, hostId: playerId })
+        body: JSON.stringify({ gameId, hostId: gameData?.currentPlayerId })
       })
 
       const data = await response.json()
@@ -185,7 +246,7 @@ export default function AdminPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          hostId: playerId,
+          hostId: gameData?.currentPlayerId,
           enabled: !autoPhaseEnabled,
           durationHours: phaseDuration
         })
@@ -230,7 +291,8 @@ export default function AdminPage() {
     )
   }
 
-  const isHost = gameData.hostId === playerId
+  const currentPlayer = gameData.players.find(p => p.userId === user?.id)
+  const isHost = currentPlayer?.isHost || false
 
   if (!isHost) {
     return (
@@ -281,6 +343,58 @@ export default function AdminPage() {
         {error && (
           <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-red-400 text-sm">
             {error}
+          </div>
+        )}
+
+        {/* Join Requests (only show if game is waiting) */}
+        {gameData.status === 'WAITING' && (
+          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-white">
+                Join Requests ({joinRequests.length})
+              </h3>
+              <button
+                onClick={fetchJoinRequests}
+                disabled={requestsLoading}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white px-3 py-1 rounded text-sm"
+              >
+                {requestsLoading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+
+            {joinRequests.length === 0 ? (
+              <p className="text-slate-400">No pending join requests</p>
+            ) : (
+              <div className="space-y-3">
+                {joinRequests.map((request) => (
+                  <div key={request.id} className="bg-white/5 rounded-lg p-4">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-white font-medium">{request.playerName}</p>
+                        <p className="text-slate-400 text-sm">{request.userEmail}</p>
+                        <p className="text-slate-500 text-xs">
+                          Requested {new Date(request.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleJoinRequest(request.id, 'accept')}
+                          className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
+                        >
+                          ✅ Accept
+                        </button>
+                        <button
+                          onClick={() => handleJoinRequest(request.id, 'reject')}
+                          className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm"
+                        >
+                          ❌ Reject
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

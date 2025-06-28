@@ -3,6 +3,9 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { ErrorBoundary, LoadingState } from '../../../components/ErrorBoundary'
+import { useGameState, useGameActions, validateGameData } from '../../../hooks/useGameState'
+import { useAuth } from '../../../lib/useAuth'
 
 interface Player {
   id: string
@@ -19,38 +22,33 @@ interface GameData {
   status: 'WAITING' | 'PLAYING' | 'ENDED'
   currentPhase: 'DAY' | 'NIGHT'
   currentDay: number
+  currentPlayerId?: string // Add current player ID from API
   players: Player[]
   currentVotes: Record<string, number>
   hasVoted: string[]
 }
 
-export default function GamePage() {
+function GamePageContent() {
   const params = useParams()
   const router = useRouter()
   const gameId = params.gameId as string
-  
+  const { user, loading: authLoading } = useAuth()
+
   const [gameData, setGameData] = useState<GameData | null>(null)
-  const [playerId, setPlayerId] = useState<string | null>(null)
-  const [playerName, setPlayerName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedTarget, setSelectedTarget] = useState('')
 
+  // Redirect to auth if not authenticated
   useEffect(() => {
-    // Get player info from localStorage
-    const storedPlayerId = localStorage.getItem('playerId')
-    const storedPlayerName = localStorage.getItem('playerName')
-    
-    if (!storedPlayerId || !storedPlayerName) {
-      router.push('/')
-      return
+    if (!authLoading && !user) {
+      router.push('/auth')
     }
-    
-    setPlayerId(storedPlayerId)
-    setPlayerName(storedPlayerName)
-  }, [router])
+  }, [authLoading, user, router])
 
   const fetchGameData = async () => {
+    if (!user) return
+
     try {
       const response = await fetch(`/api/games/${gameId}`)
       const data = await response.json()
@@ -69,20 +67,22 @@ export default function GamePage() {
   }
 
   useEffect(() => {
-    if (gameId && playerId) {
+    if (gameId && user && !authLoading) {
       fetchGameData()
       // Poll for updates every 3 seconds
       const interval = setInterval(fetchGameData, 3000)
       return () => clearInterval(interval)
     }
-  }, [gameId, playerId])
+  }, [gameId, user, authLoading])
 
   const startGame = async () => {
+    if (!gameData?.currentPlayerId) return
+
     try {
       const response = await fetch(`/api/games/${gameId}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hostId: playerId })
+        body: JSON.stringify({ hostId: gameData.currentPlayerId })
       })
 
       const data = await response.json()
@@ -98,15 +98,15 @@ export default function GamePage() {
   }
 
   const submitVote = async () => {
-    if (!selectedTarget) return
+    if (!selectedTarget || !gameData?.currentPlayerId) return
 
     try {
       const response = await fetch(`/api/games/${gameId}/vote`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          voterId: playerId, 
-          targetId: selectedTarget 
+        body: JSON.stringify({
+          voterId: gameData.currentPlayerId,
+          targetId: selectedTarget
         })
       })
 
@@ -124,11 +124,13 @@ export default function GamePage() {
   }
 
   const nextPhase = async () => {
+    if (!gameData?.currentPlayerId) return
+
     try {
       const response = await fetch(`/api/games/${gameId}/next-phase`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hostId: playerId })
+        body: JSON.stringify({ hostId: gameData.currentPlayerId })
       })
 
       const data = await response.json()
@@ -143,12 +145,16 @@ export default function GamePage() {
     }
   }
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
         <div className="text-white text-xl">Loading game...</div>
       </div>
     )
+  }
+
+  if (!user) {
+    return null // Will redirect to auth
   }
 
   if (error || !gameData) {
@@ -157,23 +163,31 @@ export default function GamePage() {
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-6 text-red-400 max-w-md">
           <h2 className="text-xl font-bold mb-2">Error</h2>
           <p>{error || 'Game not found'}</p>
-          <button 
-            onClick={() => router.push('/')}
-            className="mt-4 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg"
-          >
-            Back to Home
-          </button>
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg"
+            >
+              Dashboard
+            </button>
+            <button
+              onClick={() => router.push('/games/history')}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
+            >
+              Game History
+            </button>
+          </div>
         </div>
       </div>
     )
   }
 
-  const currentPlayer = gameData.players.find(p => p.id === playerId)
+  const currentPlayer = gameData.players.find(p => p.id === gameData.currentPlayerId)
   const isHost = currentPlayer?.isHost || false
-  const hasVoted = gameData.hasVoted.includes(playerId || '')
+  const hasVoted = gameData.hasVoted.includes(gameData.currentPlayerId || '')
   const alivePlayers = gameData.players.filter(p => p.isAlive)
-  const canVote = gameData.status === 'PLAYING' && currentPlayer?.isAlive && 
-    (gameData.currentPhase === 'DAY' || 
+  const canVote = gameData.status === 'PLAYING' && currentPlayer?.isAlive &&
+    (gameData.currentPhase === 'DAY' ||
      (gameData.currentPhase === 'NIGHT' && currentPlayer?.role === 'TRAITOR'))
 
   return (
@@ -187,7 +201,7 @@ export default function GamePage() {
               <p className="text-slate-300">Game Code: <span className="font-mono text-lg">{gameData.code}</span></p>
             </div>
             <div className="text-right">
-              <p className="text-white">Welcome, {playerName}</p>
+              <p className="text-white">Welcome, {currentPlayer?.name || user?.email}</p>
               {currentPlayer?.role && (
                 <p className={`font-bold ${currentPlayer.role === 'TRAITOR' ? 'text-red-400' : 'text-blue-400'}`}>
                   You are a {currentPlayer.role}
@@ -338,7 +352,7 @@ export default function GamePage() {
                 >
                   <option value="">Select a player to vote for...</option>
                   {alivePlayers
-                    .filter(p => p.id !== playerId)
+                    .filter(p => p.id !== gameData.currentPlayerId)
                     .map((player) => (
                       <option key={player.id} value={player.id}>
                         {player.name}
@@ -433,5 +447,13 @@ export default function GamePage() {
       {/* Add bottom padding for mobile nav */}
       {gameData?.status === 'PLAYING' && <div className="md:hidden h-20"></div>}
     </div>
+  )
+}
+
+export default function GamePage() {
+  return (
+    <ErrorBoundary>
+      <GamePageContent />
+    </ErrorBoundary>
   )
 }

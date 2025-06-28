@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useAuth } from '../../../../lib/useAuth'
 
 interface StoryEvent {
   type: 'narration' | 'elimination' | 'phase_change' | 'chaos_event'
@@ -27,13 +28,23 @@ export default function StoryPage() {
   const params = useParams()
   const router = useRouter()
   const gameId = params.gameId as string
-  
+  const { user, loading: authLoading } = useAuth()
+
   const [gameData, setGameData] = useState<GameData | null>(null)
   const [storyEvents, setStoryEvents] = useState<StoryEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  // Redirect to auth if not authenticated
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/auth')
+    }
+  }, [authLoading, user, router])
+
   const fetchStoryData = async () => {
+    if (!user) return
+
     try {
       const response = await fetch(`/api/games/${gameId}/story`)
       const data = await response.json()
@@ -53,13 +64,13 @@ export default function StoryPage() {
   }
 
   useEffect(() => {
-    if (gameId) {
+    if (gameId && user && !authLoading) {
       fetchStoryData()
       // Poll for updates every 5 seconds if game is still playing
       const interval = setInterval(fetchStoryData, 5000)
       return () => clearInterval(interval)
     }
-  }, [gameId])
+  }, [gameId, user, authLoading])
 
   if (loading) {
     return (

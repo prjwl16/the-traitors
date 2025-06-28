@@ -1,17 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../lib/db'
+import { getAuthUser } from '../../../../../lib/auth'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ gameId: string }> }
 ) {
   try {
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
     const { gameId } = await params
-    const { searchParams } = new URL(request.url)
-    const playerId = searchParams.get('playerId')
-    
-    if (!playerId) {
-      return NextResponse.json({ error: 'Player ID is required' }, { status: 400 })
+
+    // Find the player for this user in this game
+    const player = await prisma.player.findFirst({
+      where: {
+        gameId,
+        userId: user.id
+      }
+    })
+
+    if (!player) {
+      return NextResponse.json({ error: 'You are not a player in this game' }, { status: 403 })
     }
 
     const game = await prisma.game.findUnique({
@@ -28,11 +41,11 @@ export async function GET(
           orderBy: { name: 'asc' }
         },
         personalItems: {
-          where: { playerId },
+          where: { playerId: player.id },
           orderBy: { name: 'asc' }
         },
         placedItems: {
-          where: { playerId },
+          where: { playerId: player.id },
           include: {
             roomObject: { select: { name: true } }
           }
@@ -42,15 +55,6 @@ export async function GET(
 
     if (!game) {
       return NextResponse.json({ error: 'Game not found' }, { status: 404 })
-    }
-
-    // Check if player exists in game
-    const player = await prisma.player.findFirst({
-      where: { id: playerId, gameId }
-    })
-
-    if (!player) {
-      return NextResponse.json({ error: 'Player not found in game' }, { status: 404 })
     }
 
     // Format room objects with their current state
@@ -64,7 +68,7 @@ export async function GET(
         itemName: item.itemName,
         playerName: item.player.name
       })),
-      canInteract: obj.lastUpdatedBy !== playerId || obj.state === 'UNTOUCHED'
+      canInteract: obj.lastUpdatedBy !== player.id || obj.state === 'UNTOUCHED'
     }))
 
     // Get player's personal items (excluding already placed ones)

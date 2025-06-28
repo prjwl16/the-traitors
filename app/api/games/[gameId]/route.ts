@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../lib/db'
+import { getAuthUser } from '../../../../lib/auth'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ gameId: string }> }
 ) {
   try {
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
     const { gameId } = await params
     
     const game = await prisma.game.findUnique({
@@ -30,6 +37,12 @@ export async function GET(
       return NextResponse.json({ error: 'Game not found' }, { status: 404 })
     }
 
+    // Check if user is a player in this game
+    const currentPlayer = game.players.find(p => p.userId === user.id)
+    if (!currentPlayer) {
+      return NextResponse.json({ error: 'You are not a player in this game' }, { status: 403 })
+    }
+
     // Get current phase votes
     const currentVotes = game.votes.filter(
       vote => vote.phase === game.currentPhase && vote.day === game.currentDay
@@ -48,12 +61,14 @@ export async function GET(
       status: game.status,
       currentPhase: game.currentPhase,
       currentDay: game.currentDay,
+      currentPlayerId: currentPlayer.id, // Add current player ID for frontend
       players: game.players.map(player => ({
         id: player.id,
         name: player.name,
         isAlive: player.isAlive,
         isHost: player.isHost,
-        role: player.role // This will be filtered on the frontend based on viewer
+        // Only show role to the player themselves or if game is ended
+        role: (player.id === currentPlayer.id || game.status === 'ENDED') ? player.role : undefined
       })),
       currentVotes: voteCount,
       hasVoted: currentVotes.map(vote => vote.voterId)

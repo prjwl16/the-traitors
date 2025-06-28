@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../lib/db'
+import { getAuthUser } from '../../../../../lib/auth'
 
 export async function GET(
   request: NextRequest,
@@ -64,8 +65,20 @@ export async function GET(
       return NextResponse.json({ error: 'Game not found' }, { status: 404 })
     }
 
-    // Only allow access to reveal page if game has ended
-    if (game.status !== 'ENDED') {
+    // Check authentication and get user
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
+    // Check if user is a player in this game
+    const currentPlayer = game.players.find(p => p.userId === user.id)
+    if (!currentPlayer) {
+      return NextResponse.json({ error: 'You are not a player in this game' }, { status: 403 })
+    }
+
+    // Only allow access to reveal page if game has ended OR if user is the host
+    if (game.status !== 'ENDED' && !currentPlayer.isHost) {
       return NextResponse.json({ error: 'Game must be completed to view reveal' }, { status: 400 })
     }
 

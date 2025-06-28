@@ -1,19 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../../lib/db'
 import { generateRoomInteractionLog, RoomInteractionContext } from '../../../../../../lib/openaiClient'
+import { validateAuthenticatedGameAccess, validateRoomInteraction } from '../../../../../../lib/gameValidation'
+import { getAuthUser } from '../../../../../../lib/auth'
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ gameId: string }> }
 ) {
   try {
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
     const { gameId } = await params
-    const { playerId, objectId, action, itemName } = await request.json()
-    
-    if (!playerId || !objectId || !action) {
+    const { objectId, action, itemName } = await request.json()
+
+    if (!objectId || !action) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
+    // Find the player for this user in this game
+    const player = await prisma.player.findFirst({
+      where: {
+        gameId,
+        userId: user.id
+      }
+    })
+
+    if (!player) {
+      return NextResponse.json({ error: 'You are not a player in this game' }, { status: 403 })
+    }
+
+    // Get game data
     const game = await prisma.game.findUnique({
       where: { id: gameId },
       include: { players: true }
@@ -27,9 +48,8 @@ export async function POST(
       return NextResponse.json({ error: 'Game must be in progress' }, { status: 400 })
     }
 
-    const player = game.players.find(p => p.id === playerId)
-    if (!player || !player.isAlive) {
-      return NextResponse.json({ error: 'Invalid or dead player' }, { status: 400 })
+    if (!player.isAlive) {
+      return NextResponse.json({ error: 'Dead players cannot interact with room objects' }, { status: 400 })
     }
 
     const roomObject = await prisma.roomObject.findUnique({
@@ -41,10 +61,8 @@ export async function POST(
       return NextResponse.json({ error: 'Room object not found' }, { status: 404 })
     }
 
-    // Check if player has already interacted with this object this phase
-    if (roomObject.lastUpdatedBy === playerId && roomObject.state !== 'UNTOUCHED') {
-      return NextResponse.json({ error: 'You have already interacted with this object this phase' }, { status: 400 })
-    }
+    // Validate room interaction permissions
+    validateRoomInteraction(player, roomObject, action, itemName)
 
     let newState = roomObject.state
     let actionDescription = ''
@@ -55,7 +73,7 @@ export async function POST(
       const personalItem = await prisma.personalItem.findFirst({
         where: {
           gameId,
-          playerId,
+          playerId: player.id,
           name: itemName
         }
       })
@@ -68,7 +86,7 @@ export async function POST(
       const existingPlacement = await prisma.placedItem.findFirst({
         where: {
           gameId,
-          playerId,
+          playerId: player.id,
           itemName
         }
       })
@@ -81,7 +99,7 @@ export async function POST(
       await prisma.placedItem.create({
         data: {
           gameId,
-          playerId,
+          playerId: player.id,
           itemName,
           objectId,
           phase: game.currentPhase,
@@ -128,7 +146,7 @@ export async function POST(
         data: {
           state: newState,
           lastAction: actionDescription,
-          lastUpdatedBy: playerId
+          lastUpdatedBy: player.id
         }
       }),
       prisma.roomLog.create({

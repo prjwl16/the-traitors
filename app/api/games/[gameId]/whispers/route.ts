@@ -1,17 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../lib/db'
+import { getAuthUser } from '../../../../../lib/auth'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ gameId: string }> }
 ) {
   try {
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
     const { gameId } = await params
     const { searchParams } = new URL(request.url)
     const playerId = searchParams.get('playerId')
-    
+
     if (!playerId) {
       return NextResponse.json({ error: 'Player ID is required' }, { status: 400 })
+    }
+
+    // Verify the player belongs to the authenticated user
+    const player = await prisma.player.findUnique({
+      where: { id: playerId },
+      include: { game: true }
+    })
+
+    if (!player || player.userId !== user.id || player.gameId !== gameId) {
+      return NextResponse.json({ error: 'Unauthorized access to player data' }, { status: 403 })
     }
 
     // Get sent whispers
@@ -75,11 +92,26 @@ export async function POST(
   { params }: { params: Promise<{ gameId: string }> }
 ) {
   try {
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
     const { gameId } = await params
     const { fromPlayerId, toPlayerId, content } = await request.json()
-    
+
     if (!fromPlayerId || !toPlayerId || !content?.trim()) {
       return NextResponse.json({ error: 'All fields are required' }, { status: 400 })
+    }
+
+    // Verify the sender belongs to the authenticated user
+    const senderPlayer = await prisma.player.findUnique({
+      where: { id: fromPlayerId }
+    })
+
+    if (!senderPlayer || senderPlayer.userId !== user.id || senderPlayer.gameId !== gameId) {
+      return NextResponse.json({ error: 'Unauthorized to send whisper as this player' }, { status: 403 })
     }
 
     if (content.length > 140) {

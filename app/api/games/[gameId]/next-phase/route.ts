@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../lib/db'
+import { validateGameAccess, processVoteElimination, checkWinConditions, withGameLock } from '../../../../../lib/gameValidation'
 
 export async function POST(
   request: NextRequest,
@@ -8,68 +9,40 @@ export async function POST(
   try {
     const { hostId } = await request.json()
     const { gameId } = await params
-    
-    const game = await prisma.game.findUnique({
-      where: { id: gameId },
-      include: { 
-        players: true,
-        votes: {
-          where: {
-            phase: { in: ['DAY', 'NIGHT'] },
-            day: { gte: 1 }
-          }
-        }
+
+    if (!hostId) {
+      return NextResponse.json({ error: 'Host ID is required' }, { status: 400 })
+    }
+
+    return await withGameLock(gameId, async () => {
+      // Validate game access and host permissions
+      const { game } = await validateGameAccess(gameId, hostId, {
+        requireHost: true,
+        allowedStatuses: ['PLAYING']
+      })
+
+      // Get current phase votes
+      const currentVotes = game.votes.filter(
+        (vote: any) => vote.phase === game.currentPhase && vote.day === game.currentDay
+      )
+
+      // Process vote elimination with tie-breaking
+      const { eliminatedPlayerId, voteCount, tieOccurred } = processVoteElimination(currentVotes)
+
+      if (tieOccurred && eliminatedPlayerId) {
+        console.log(`Vote tie resolved randomly in favor of eliminating player ${eliminatedPlayerId}`)
       }
-    })
 
-    if (!game) {
-      return NextResponse.json({ error: 'Game not found' }, { status: 404 })
-    }
+      // Determine next phase
+      let nextPhase: 'DAY' | 'NIGHT'
+      let nextDay = game.currentDay
 
-    if (game.hostId !== hostId) {
-      return NextResponse.json({ error: 'Only the host can advance phases' }, { status: 403 })
-    }
-
-    if (game.status !== 'PLAYING') {
-      return NextResponse.json({ error: 'Game is not in progress' }, { status: 400 })
-    }
-
-    // Get current phase votes
-    const currentVotes = game.votes.filter(
-      vote => vote.phase === game.currentPhase && vote.day === game.currentDay
-    )
-
-    // Count votes and find the player with most votes
-    const voteCount = currentVotes.reduce((acc, vote) => {
-      acc[vote.targetId] = (acc[vote.targetId] || 0) + 1
-      return acc
-    }, {} as Record<string, number>)
-
-    let eliminatedPlayerId: string | null = null
-    
-    if (Object.keys(voteCount).length > 0) {
-      // Find player with most votes (simple majority, no tie-breaking for now)
-      const maxVotes = Math.max(...Object.values(voteCount))
-      const playersWithMaxVotes = Object.entries(voteCount)
-        .filter(([_, votes]) => votes === maxVotes)
-        .map(([playerId, _]) => playerId)
-      
-      // If there's a clear winner (no tie), eliminate them
-      if (playersWithMaxVotes.length === 1) {
-        eliminatedPlayerId = playersWithMaxVotes[0]
+      if (game.currentPhase === 'DAY') {
+        nextPhase = 'NIGHT'
+      } else {
+        nextPhase = 'DAY'
+        nextDay += 1
       }
-    }
-
-    // Determine next phase
-    let nextPhase: 'DAY' | 'NIGHT'
-    let nextDay = game.currentDay
-
-    if (game.currentPhase === 'DAY') {
-      nextPhase = 'NIGHT'
-    } else {
-      nextPhase = 'DAY'
-      nextDay += 1
-    }
 
     // Update game and eliminate player if needed
     const updates: any[] = [
@@ -91,41 +64,43 @@ export async function POST(
       )
     }
 
-    await prisma.$transaction(updates)
+      // Check win conditions BEFORE updating database
+      const playersAfterElimination = game.players.map((p: any) =>
+        p.id === eliminatedPlayerId ? { ...p, isAlive: false } : p
+      )
+      const { ended: gameEnded, winner } = checkWinConditions(playersAfterElimination)
 
-    // Check win conditions
-    const alivePlayers = game.players.filter(p => p.isAlive && p.id !== eliminatedPlayerId)
-    const aliveTraitors = alivePlayers.filter(p => p.role === 'TRAITOR').length
-    const aliveFaithfuls = alivePlayers.filter(p => p.role === 'FAITHFUL').length
+      // Update game state and end game if needed
+      if (gameEnded) {
+        updates.push(
+          prisma.game.update({
+            where: { id: gameId },
+            data: {
+              status: 'ENDED',
+              winner: winner,
+              endedAt: new Date()
+            }
+          })
+        )
+      }
 
-    let gameEnded = false
-    let winner: string | null = null
+      await prisma.$transaction(updates)
 
-    if (aliveTraitors === 0) {
-      winner = 'FAITHFULS'
-      gameEnded = true
-    } else if (aliveTraitors >= aliveFaithfuls) {
-      winner = 'TRAITORS'
-      gameEnded = true
-    }
-
-    if (gameEnded) {
-      await prisma.game.update({
-        where: { id: gameId },
-        data: { status: 'ENDED' }
+      return NextResponse.json({
+        success: true,
+        nextPhase,
+        nextDay,
+        eliminatedPlayerId,
+        gameEnded,
+        winner,
+        tieOccurred
       })
-    }
-
-    return NextResponse.json({ 
-      success: true,
-      nextPhase,
-      nextDay,
-      eliminatedPlayerId,
-      gameEnded,
-      winner
     })
+
   } catch (error) {
     console.error('Error advancing phase:', error)
-    return NextResponse.json({ error: 'Failed to advance phase' }, { status: 500 })
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : 'Failed to advance phase'
+    }, { status: 500 })
   }
 }

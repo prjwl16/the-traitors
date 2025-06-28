@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../lib/db'
 import { v4 as uuidv4 } from 'uuid'
+import { getAuthUser } from '../../../lib/auth'
 
 export async function POST(request: NextRequest) {
   try {
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
     const { playerName, gameCode } = await request.json()
-    
+
     if (!playerName || playerName.trim().length === 0) {
       return NextResponse.json({ error: 'Player name is required' }, { status: 400 })
     }
@@ -50,6 +57,7 @@ export async function POST(request: NextRequest) {
         id: playerId,
         name: playerName.trim(),
         gameId: game.id,
+        userId: user.id, // Link to authenticated user
         isHost: false
       }
     })

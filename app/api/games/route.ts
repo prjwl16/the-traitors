@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../lib/db'
 import { v4 as uuidv4 } from 'uuid'
+import { getAuthUser } from '../../../lib/auth'
 
 // Generate a 6-character game code
 function generateGameCode(): string {
@@ -9,10 +10,20 @@ function generateGameCode(): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const { hostName } = await request.json()
-    
+    // Check authentication
+    const user = await getAuthUser(request)
+    if (!user) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    }
+
+    const { hostName, isPublic, gameName } = await request.json()
+
     if (!hostName || hostName.trim().length === 0) {
       return NextResponse.json({ error: 'Host name is required' }, { status: 400 })
+    }
+
+    if (isPublic && (!gameName || gameName.trim().length === 0)) {
+      return NextResponse.json({ error: 'Game name is required for public games' }, { status: 400 })
     }
 
     // Generate unique game code
@@ -38,10 +49,13 @@ export async function POST(request: NextRequest) {
       data: {
         code: gameCode,
         hostId: hostId,
+        isPublic: isPublic || false,
+        gameName: isPublic ? gameName?.trim() : null,
         players: {
           create: {
             id: hostId,
             name: hostName.trim(),
+            userId: user.id, // Link to authenticated user
             isHost: true
           }
         }

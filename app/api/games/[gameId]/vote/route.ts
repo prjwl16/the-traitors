@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '../../../../../lib/db'
+import { validateAuthenticatedGameAccess, validateVotingPermissions } from '../../../../../lib/gameValidation'
 
 export async function POST(
   request: NextRequest,
@@ -8,52 +9,30 @@ export async function POST(
   try {
     const { voterId, targetId } = await request.json()
     const { gameId } = await params
-    
-    const game = await prisma.game.findUnique({
-      where: { id: gameId },
-      include: { 
-        players: true,
-        votes: {
-          where: {
-            phase: { in: ['DAY', 'NIGHT'] },
-            day: { gte: 1 }
-          }
-        }
-      }
+
+    if (!voterId || !targetId) {
+      return NextResponse.json({ error: 'Voter ID and target ID are required' }, { status: 400 })
+    }
+
+    // Validate authenticated game access and voter permissions
+    const { game, player: voter } = await validateAuthenticatedGameAccess(request, gameId, voterId, {
+      requireAlive: true,
+      allowedStatuses: ['PLAYING']
     })
 
-    if (!game) {
-      return NextResponse.json({ error: 'Game not found' }, { status: 404 })
+    // Find target player
+    const target = game.players.find((p: any) => p.id === targetId)
+    if (!target) {
+      return NextResponse.json({ error: 'Target player not found' }, { status: 400 })
     }
 
-    if (game.status !== 'PLAYING') {
-      return NextResponse.json({ error: 'Game is not in progress' }, { status: 400 })
-    }
-
-    const voter = game.players.find(p => p.id === voterId)
-    const target = game.players.find(p => p.id === targetId)
-
-    if (!voter || !target) {
-      return NextResponse.json({ error: 'Invalid voter or target' }, { status: 400 })
-    }
-
-    if (!voter.isAlive) {
-      return NextResponse.json({ error: 'Dead players cannot vote' }, { status: 400 })
-    }
-
-    if (!target.isAlive) {
-      return NextResponse.json({ error: 'Cannot vote for dead players' }, { status: 400 })
-    }
-
-    // Check voting permissions based on phase
-    if (game.currentPhase === 'NIGHT' && voter.role !== 'TRAITOR') {
-      return NextResponse.json({ error: 'Only traitors can vote during night phase' }, { status: 403 })
-    }
+    // Validate voting permissions
+    validateVotingPermissions(voter, target, game.currentPhase)
 
     // Check if player has already voted in this phase/day
     const existingVote = game.votes.find(
-      vote => vote.voterId === voterId && 
-               vote.phase === game.currentPhase && 
+      (vote: any) => vote.voterId === voterId &&
+               vote.phase === game.currentPhase &&
                vote.day === game.currentDay
     )
 

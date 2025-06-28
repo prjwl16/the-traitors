@@ -11,6 +11,17 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  players      Player[]
+  joinRequests JoinRequest[]
+}
+
 model Game {
   id           String   @id @default(cuid())
   code         String   @unique
@@ -20,6 +31,10 @@ model Game {
   currentDay   Int      @default(1)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  endedAt      DateTime?
+  winner       String?  // 'TRAITORS' or 'FAITHFUL'
+  isPublic     Boolean  @default(false)
+  gameName     String?  // Optional display name for public games
 
   // Auto-phase settings
   autoPhaseEnabled Boolean @default(false)
@@ -36,18 +51,21 @@ model Game {
   personalItems PersonalItem[]
   placedItems   PlacedItem[]
   roomLogs      RoomLog[]
+  joinRequests  JoinRequest[]
 }
 
 model Player {
   id       String   @id @default(cuid())
   name     String
   gameId   String
+  userId   String?  // Link to authenticated user
   role     PlayerRole?
   isAlive  Boolean  @default(true)
   isHost   Boolean  @default(false)
   joinedAt DateTime @default(now())
 
   game             Game            @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user             User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
   votesGiven       Vote[]          @relation("VoterVotes")
   votesReceived    Vote[]          @relation("TargetVotes")
   missions         PlayerMission[]
@@ -213,4 +231,25 @@ enum ObjectState {
 enum PlayerRole {
   TRAITOR
   FAITHFUL
+}
+
+model JoinRequest {
+  id         String   @id @default(cuid())
+  gameId     String
+  userId     String
+  playerName String
+  status     JoinRequestStatus @default(PENDING)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, userId])
+}
+
+enum JoinRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
 }
