@@ -28,6 +28,7 @@ interface GameData {
   currentPhase: 'DAY' | 'NIGHT'
   currentDay: number
   status: 'WAITING' | 'PLAYING' | 'ENDED'
+  currentPlayerId: string
   players: Player[]
 }
 
@@ -37,8 +38,6 @@ export default function WhispersPage() {
   const gameId = params.gameId as string
   
   const [gameData, setGameData] = useState<GameData | null>(null)
-  const [playerId, setPlayerId] = useState<string | null>(null)
-  const [playerName, setPlayerName] = useState<string | null>(null)
   const [selectedRecipient, setSelectedRecipient] = useState('')
   const [message, setMessage] = useState('')
   const [sentWhispers, setSentWhispers] = useState<Whisper[]>([])
@@ -47,25 +46,9 @@ export default function WhispersPage() {
   const [error, setError] = useState('')
   const [sending, setSending] = useState(false)
 
-  useEffect(() => {
-    // Get player info from localStorage
-    const storedPlayerId = localStorage.getItem('playerId')
-    const storedPlayerName = localStorage.getItem('playerName')
-    
-    if (!storedPlayerId || !storedPlayerName) {
-      router.push('/')
-      return
-    }
-    
-    setPlayerId(storedPlayerId)
-    setPlayerName(storedPlayerName)
-  }, [router])
-
   const fetchData = async () => {
-    if (!playerId) return
-
     try {
-      // Fetch game data
+      // Fetch game data first to get the current player ID
       const gameResponse = await fetch(`/api/games/${gameId}`)
       const gameData = await gameResponse.json()
 
@@ -75,8 +58,14 @@ export default function WhispersPage() {
 
       setGameData(gameData)
 
-      // Fetch whispers
-      const whispersResponse = await fetch(`/api/games/${gameId}/whispers?playerId=${playerId}`)
+      // Get the current player ID from the game data (this is already validated by the API)
+      const currentPlayerId = gameData.currentPlayerId
+      if (!currentPlayerId) {
+        throw new Error('You are not a player in this game')
+      }
+
+      // Fetch whispers using the validated player ID
+      const whispersResponse = await fetch(`/api/games/${gameId}/whispers?playerId=${currentPlayerId}`)
       const whispersData = await whispersResponse.json()
 
       if (!whispersResponse.ok) {
@@ -95,17 +84,22 @@ export default function WhispersPage() {
   }
 
   useEffect(() => {
-    if (gameId && playerId) {
+    if (gameId) {
       fetchData()
       // Poll for updates every 5 seconds
       const interval = setInterval(fetchData, 5000)
       return () => clearInterval(interval)
     }
-  }, [gameId, playerId])
+  }, [gameId])
 
   const sendWhisper = async () => {
     if (!selectedRecipient || !message.trim()) {
       setError('Please select a recipient and enter a message')
+      return
+    }
+
+    if (!gameData?.currentPlayerId) {
+      setError('Unable to identify current player')
       return
     }
 
@@ -117,7 +111,7 @@ export default function WhispersPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fromPlayerId: playerId,
+          fromPlayerId: gameData.currentPlayerId,
           toPlayerId: selectedRecipient,
           content: message.trim()
         })
@@ -164,8 +158,8 @@ export default function WhispersPage() {
     )
   }
 
-  const currentPlayer = gameData?.players.find(p => p.id === playerId)
-  const otherAlivePlayers = gameData?.players.filter(p => p.isAlive && p.id !== playerId) || []
+  const currentPlayer = gameData?.players.find(p => p.id === gameData.currentPlayerId)
+  const otherAlivePlayers = gameData?.players.filter(p => p.isAlive && p.id !== gameData.currentPlayerId) || []
   
   // Check if player has already sent a whisper this phase
   const hasWhisperedThisPhase = sentWhispers.some(
